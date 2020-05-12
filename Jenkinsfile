@@ -1,96 +1,34 @@
-#!/usr/bin/env groovy
+node {
+  // Mark the code checkout 'stage'....
+  stage 'Stage Checkout'
 
-/*
-The MIT License
+  // Checkout code from repository and update any submodules
+  checkout scm
+  sh 'git submodule update --init'  
 
-Copyright (c) 2015-, CloudBees, Inc., and a number of other of contributors
+  stage 'Stage Build'
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+  //branch name from Jenkins environment variables
+  echo "My branch is: ${env.BRANCH_NAME}"
 
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
+  def flavor = flavor(env.BRANCH_NAME)
+  echo "Building flavor ${flavor}"
 
-        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
+  //build your gradle flavor, passes the current build number as a parameter to gradle
+  sh "./gradlew clean assemble${flavor}Debug -PBUILD_NUMBER=${env.BUILD_NUMBER}"
 
-node('node') {
+  stage 'Stage Archive'
+  //tell Jenkins to archive the apks
+  archiveArtifacts artifacts: 'app/build/outputs/apk/*.apk', fingerprint: true
 
+  stage 'Stage Upload To Fabric'
+  sh "./gradlew crashlyticsUploadDistribution${flavor}Debug  -PBUILD_NUMBER=${env.BUILD_NUMBER}"
+}
 
-    currentBuild.result = "SUCCESS"
-
-    try {
-
-       stage('Checkout'){
-
-          checkout scm
-       }
-
-       stage('Test'){
-
-         env.NODE_ENV = "test"
-
-         print "Environment will be : ${env.NODE_ENV}"
-
-         sh 'node -v'
-         sh 'npm prune'
-         sh 'npm install'
-         sh 'npm test'
-
-       }
-
-       stage('Build Docker'){
-
-            sh './dockerBuild.sh'
-       }
-
-       stage('Deploy'){
-
-         echo 'Push to Repo'
-         sh './dockerPushToRepo.sh'
-
-         echo 'ssh to web server and tell it to pull new image'
-         sh 'ssh deploy@xxxxx.xxxxx.com running/xxxxxxx/dockerRun.sh'
-
-       }
-
-       stage('Cleanup'){
-
-         echo 'prune and cleanup'
-         sh 'npm prune'
-         sh 'rm node_modules -rf'
-
-         mail body: 'project build successful',
-                     from: 'xxxx@yyyyy.com',
-                     replyTo: 'xxxx@yyyy.com',
-                     subject: 'project build successful',
-                     to: 'yyyyy@yyyy.com'
-       }
-
-
-
-    }
-    catch (err) {
-
-        currentBuild.result = "FAILURE"
-
-            mail body: "project build error is here: ${env.BUILD_URL}" ,
-            from: 'xxxx@yyyy.com',
-            replyTo: 'yyyy@yyyy.com',
-            subject: 'project build failed',
-            to: 'zzzz@yyyyy.com'
-
-        throw err
-    }
-
+// Pulls the android flavor out of the branch name the branch is prepended with /QA_
+@NonCPS
+def flavor(branchName) {
+  def matcher = (env.BRANCH_NAME =~ /QA_([a-z_]+)/)
+  assert matcher.matches()
+  matcher[0][1]
 }
